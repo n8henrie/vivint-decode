@@ -1,7 +1,11 @@
 [package]
 name = "vivint-decode"
-lersion = "0.1.1"
+version = "0.1.1"
 edition = "2024"
+publish = true
+description = "Find the seed and decode 345 MHz output from Vivint DW21R sensors"
+license = "MIT"
+repository = "https://github.com/n8henrie/vivint-decode"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
