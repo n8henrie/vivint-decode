@@ -2,7 +2,7 @@
 //! working only from `rtl_433` captures. No firmware, no key at runtime.
 //!
 //!   vivint-decode crack  [captures...]            # recover the 16-bit seed
-//!   vivint-decode decode <seed> [captures...]     # interpret packets with it
+//!   vivint-decode decode &lt;seed&gt; [captures...]     # interpret packets with it
 //!
 //! Captures are `rtl_433` output (JSON / CSV / codes / plain hex), given as files
 //! (concatenated) or on stdin when no files are named.
