@@ -10,13 +10,20 @@ const BIN: &str = env!("CARGO_BIN_EXE_vivint-decode");
 
 // Public rtl_433 #1504 captures (bit-inverted `0001…` polarity).
 const FRAMES: &[&str] = &[
-    "{96}000185ffe413fec8412524a2", "{96}000185ffe303fec84125ed61",
-    "{96}000185ffe2f3fec841255aa3", "{96}000185ffe1affec84125aff5",
-    "{96}000185ffe0c7fec841259852", "{96}000185ffe043fec841259779",
-    "{96}000185ffdf2bfec84125fd4e", "{96}000185ffdee3fec841253b35",
-    "{96}000185ffde67fec84125341e", "{96}000185ffdddffec84125ae77",
-    "{96}000185ffdd5ffec84125a544", "{96}000185ffdc9ffec84125a98f",
-    "{96}000185ffdc1ffec84125a2bc", "{96}000185ffdb93fec841251d22",
+    "{96}000185ffe413fec8412524a2",
+    "{96}000185ffe303fec84125ed61",
+    "{96}000185ffe2f3fec841255aa3",
+    "{96}000185ffe1affec84125aff5",
+    "{96}000185ffe0c7fec841259852",
+    "{96}000185ffe043fec841259779",
+    "{96}000185ffdf2bfec84125fd4e",
+    "{96}000185ffdee3fec841253b35",
+    "{96}000185ffde67fec84125341e",
+    "{96}000185ffdddffec84125ae77",
+    "{96}000185ffdd5ffec84125a544",
+    "{96}000185ffdc9ffec84125a98f",
+    "{96}000185ffdc1ffec84125a2bc",
+    "{96}000185ffdb93fec841251d22",
 ];
 
 fn run_stdin(args: &[&str], input: &str) -> (bool, String) {
@@ -27,9 +34,17 @@ fn run_stdin(args: &[&str], input: &str) -> (bool, String) {
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn");
-    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
-    (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
 }
 
 fn recovered_seed() -> String {
@@ -54,7 +69,10 @@ fn crack_recovers_a_unique_seed_from_stdin() {
 fn crack_reads_positional_capture_files() {
     let path = std::env::temp_dir().join("vivint_keystream_cli.txt");
     std::fs::write(&path, FRAMES.join("\n")).unwrap();
-    let out = Command::new(BIN).args(["crack", path.to_str().unwrap()]).output().unwrap();
+    let out = Command::new(BIN)
+        .args(["crack", path.to_str().unwrap()])
+        .output()
+        .unwrap();
     let _ = std::fs::remove_file(&path);
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("recovered seed: 0x"));
@@ -71,7 +89,21 @@ fn decode_uses_the_recovered_seed() {
 
 #[test]
 fn help_and_bad_usage() {
-    assert!(Command::new(BIN).arg("--help").output().unwrap().status.success());
+    assert!(
+        Command::new(BIN)
+            .arg("--help")
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
     // a bad subcommand is a clap usage error (nonzero exit)
-    assert!(!Command::new(BIN).arg("frobnicate").output().unwrap().status.success());
+    assert!(
+        !Command::new(BIN)
+            .arg("frobnicate")
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
 }

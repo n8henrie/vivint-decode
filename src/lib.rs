@@ -51,10 +51,14 @@ enum Cmd {
 pub fn run() -> ExitCode {
     match Cli::parse().cmd {
         Cmd::Crack { captures } => crack(&captures).into(),
-        Cmd::Decode { seed, captures } => if let Some(s) = parse_seed(&seed) { decode(s, &captures).into() } else {
-            eprintln!("invalid seed {seed:?} (expected hex 0x.... or a decimal 0..65535)");
-            ExitCode::FAILURE
-        },
+        Cmd::Decode { seed, captures } => {
+            if let Some(s) = parse_seed(&seed) {
+                decode(s, &captures).into()
+            } else {
+                eprintln!("invalid seed {seed:?} (expected hex 0x.... or a decimal 0..65535)");
+                ExitCode::FAILURE
+            }
+        }
     }
 }
 

@@ -76,7 +76,12 @@ impl Generator {
     fn f294(&mut self) {
         let counter = self.r16(0x206);
         let m = (counter % 7) as usize;
-        self.w16(0x27a + m * 2, self.r16(0x27a + m * 2).wrapping_add(counter).wrapping_add(m as u16));
+        self.w16(
+            0x27a + m * 2,
+            self.r16(0x27a + m * 2)
+                .wrapping_add(counter)
+                .wrapping_add(m as u16),
+        );
         self.w16(0x288, self.r16(0x288) ^ m as u16);
         let e: [u16; 8] = std::array::from_fn(|i| self.r16(0x27a + 2 * i));
         let mut s1 = [0u16; 16];
@@ -115,13 +120,18 @@ impl Generator {
             let b = self.r32(0x24e + r8 * 4);
             let sub = self.r32(SC - 4 + r8 * 4);
             let borrow = u32::from(b < sub);
-            self.w32(0x252 + r8 * 4, a.wrapping_add(rom_dword(r8 * 4)).wrapping_add(borrow));
+            self.w32(
+                0x252 + r8 * 4,
+                a.wrapping_add(rom_dword(r8 * 4)).wrapping_add(borrow),
+            );
         }
         let borrow = u16::from(self.r32(0x26e) < self.r32(0x2b0));
         self.w16(0x272, borrow);
         self.w16(0x274, 0);
         for r8 in 0..8 {
-            let x = self.r32(0x232 + r8 * 4).wrapping_add(self.r32(0x252 + r8 * 4));
+            let x = self
+                .r32(0x232 + r8 * 4)
+                .wrapping_add(self.r32(0x252 + r8 * 4));
             let lo = x & 0xffff;
             let hi = x >> 16;
             let xsq = x.wrapping_mul(x);
@@ -136,11 +146,18 @@ impl Generator {
         for r8 in [0usize, 2, 4, 6] {
             let t1 = self.r32(SC + r11 * 4).rotate_left(16);
             let t2 = self.r32(SC + r10 * 4).rotate_left(16);
-            self.w32(0x232 + r8 * 4, t1.wrapping_add(self.r32(SC + r8 * 4)).wrapping_add(t2));
+            self.w32(
+                0x232 + r8 * 4,
+                t1.wrapping_add(self.r32(SC + r8 * 4)).wrapping_add(t2),
+            );
             r11 = (r11 + 1) % 8;
             r10 = (r10 + 1) % 8;
             let t3 = self.r32(SC + r11 * 4).rotate_left(8);
-            self.w32(0x236 + r8 * 4, t3.wrapping_add(self.r32(SC + 4 + r8 * 4)).wrapping_add(self.r32(SC + r10 * 4)));
+            self.w32(
+                0x236 + r8 * 4,
+                t3.wrapping_add(self.r32(SC + 4 + r8 * 4))
+                    .wrapping_add(self.r32(SC + r10 * 4)),
+            );
             r11 = (r11 + 1) % 8;
             r10 = (r10 + 1) % 8;
         }
@@ -158,10 +175,26 @@ impl Generator {
     fn f386(&mut self) {
         let k = self.r16(0x206) & 3;
         let (r14, r12, r13) = match k {
-            0 => (self.r16(0x23e), self.r16(0x248) ^ self.r16(0x232), self.r16(0x234)),
-            1 => (self.r16(0x246), self.r16(0x250) ^ self.r16(0x23a), self.r16(0x23c)),
-            2 => (self.r16(0x24e), self.r16(0x238) ^ self.r16(0x242), self.r16(0x244)),
-            _ => (self.r16(0x236), self.r16(0x240) ^ self.r16(0x24a), self.r16(0x24c)),
+            0 => (
+                self.r16(0x23e),
+                self.r16(0x248) ^ self.r16(0x232),
+                self.r16(0x234),
+            ),
+            1 => (
+                self.r16(0x246),
+                self.r16(0x250) ^ self.r16(0x23a),
+                self.r16(0x23c),
+            ),
+            2 => (
+                self.r16(0x24e),
+                self.r16(0x238) ^ self.r16(0x242),
+                self.r16(0x244),
+            ),
+            _ => (
+                self.r16(0x236),
+                self.r16(0x240) ^ self.r16(0x24a),
+                self.r16(0x24c),
+            ),
         };
         let r13 = r13 ^ r14;
         self.m[0x2c1] = r12 as u8;
@@ -243,7 +276,12 @@ impl Decoder {
     pub(crate) fn new(seed: u16) -> Self {
         let mut state = Generator::new();
         state.begin(seed);
-        Decoder { state, seed, counter: ENTRY_COUNTER, cache: std::collections::HashMap::new() }
+        Decoder {
+            state,
+            seed,
+            counter: ENTRY_COUNTER,
+            cache: std::collections::HashMap::new(),
+        }
     }
 
     /// The status-key byte c1 at `counter`, or None if unreachable within one
@@ -312,7 +350,10 @@ pub(crate) fn crack(mut targets: Vec<(u16, u8)>) -> Vec<u16> {
                 })
             })
             .collect();
-        let mut all: Vec<u16> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
+        let mut all: Vec<u16> = handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect();
         all.sort_unstable();
         all
     })
@@ -338,7 +379,10 @@ mod tests {
             c = nc;
             by_counter.insert(c, byte10_from_c3(c3));
         }
-        counters.iter().map(|&cnt| (cnt, by_counter[&cnt])).collect()
+        counters
+            .iter()
+            .map(|&cnt| (cnt, by_counter[&cnt]))
+            .collect()
     }
 
     #[test]
@@ -346,7 +390,11 @@ mod tests {
         // Generate frames from a seed, then recover exactly that seed. This
         // exercises the whole cipher and the brute force without any real secret.
         for &seed in TEST_SEEDS {
-            assert_eq!(crack(observations_for(seed, COUNTERS)), vec![seed], "seed {seed:#06x}");
+            assert_eq!(
+                crack(observations_for(seed, COUNTERS)),
+                vec![seed],
+                "seed {seed:#06x}"
+            );
         }
     }
 
