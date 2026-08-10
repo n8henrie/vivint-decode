@@ -1,6 +1,5 @@
 {
   description = "Find the seed and decode 345 MHz output from Vivint DW21R sensors";
-
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
 
   outputs =
@@ -30,7 +29,7 @@
 
         apps.default = {
           type = "app";
-          program = pkgs.lib.getExe' self.packages.${system}.${name};
+          program = pkgs.lib.getExe' self.packages.${system}.${name} name;
         };
 
         devShells.default = pkgs.mkShell {

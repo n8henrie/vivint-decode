@@ -17,9 +17,9 @@
 pub(crate) struct Frame {
     pub(crate) subtype: u8, // core[0]: 0x7a contact, 0x72 heartbeat, ...
     pub(crate) counter: u16,
-    pub(crate) status: u8,  // core[3], keystreamed (XOR c1)
-    byte10: u8,             // core[8] high nibble carries (c3 ^ 0x10)
-    id: [u8; 4],            // core[4..8]
+    pub(crate) status: u8, // core[3], keystreamed (XOR c1)
+    byte10: u8,            // core[8] high nibble carries (c3 ^ 0x10)
+    id: [u8; 4],           // core[4..8]
 }
 
 impl Frame {
@@ -46,7 +46,8 @@ impl Frame {
     /// The printed device label, e.g. "XXXX-XXX-XXXX", from the id bytes.
     pub(crate) fn txid(&self) -> String {
         let p1 = ((self.id[0] as u32) << 4) | ((self.id[1] as u32) >> 4);
-        let p2 = (((self.id[1] & 0x0f) as u32) << 16) | ((self.id[2] as u32) << 8) | self.id[3] as u32;
+        let p2 =
+            (((self.id[1] & 0x0f) as u32) << 16) | ((self.id[2] as u32) << 8) | self.id[3] as u32;
         format!("{:04}-{:03}-{:04}", p1, p2 / 10000, p2 % 10000)
     }
 }
@@ -57,7 +58,11 @@ fn crc16_8050(data: &[u8]) -> u16 {
     for &b in data {
         crc ^= (b as u16) << 8;
         for _ in 0..8 {
-            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x8050 } else { crc << 1 };
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ 0x8050
+            } else {
+                crc << 1
+            };
         }
     }
     crc
@@ -199,8 +204,14 @@ mod tests {
 
     #[test]
     fn extracts_from_json_csv_plain() {
-        assert_eq!(frames_in_line(&format!(r#"{{"rows":[{{"data":"{DIRECT}"}}]}}"#))[0].counter, 27);
-        assert_eq!(frames_in_line(&format!("2,1768243657.59,96,{DIRECT},0.08,false,6"))[0].counter, 27);
+        assert_eq!(
+            frames_in_line(&format!(r#"{{"rows":[{{"data":"{DIRECT}"}}]}}"#))[0].counter,
+            27
+        );
+        assert_eq!(
+            frames_in_line(&format!("2,1768243657.59,96,{DIRECT},0.08,false,6"))[0].counter,
+            27
+        );
         assert!(frames_in_line("rtl_433 startup, no frame here").is_empty());
     }
 
@@ -235,7 +246,10 @@ mod tests {
         assert_eq!(f.status, 0x54);
         // Works with a length prefix and inside a CSV data column too.
         assert_eq!(frames_in_line(&format!("{{80}}{BARE}"))[0].counter, 29);
-        assert_eq!(frames_in_line(&format!("2,1768243657.59,80,{BARE},0.08,false,6"))[0].counter, 29);
+        assert_eq!(
+            frames_in_line(&format!("2,1768243657.59,80,{BARE},0.08,false,6"))[0].counter,
+            29
+        );
         // A one-char corruption breaks the CRC and yields nothing.
         assert!(frames_in_line("7a001d5403863139a666").is_empty());
     }

@@ -127,7 +127,12 @@ impl Device {
 
     /// Every seed consistent with this device's lowest-counter observations.
     fn seeds(&self) -> Vec<u16> {
-        let used: Vec<(u16, u8)> = self.by_counter.iter().take(WINDOW).map(|(&c, &h)| (c, h)).collect();
+        let used: Vec<(u16, u8)> = self
+            .by_counter
+            .iter()
+            .take(WINDOW)
+            .map(|(&c, &h)| (c, h))
+            .collect();
         cipher::crack(used)
     }
 }
@@ -141,7 +146,10 @@ fn ingest(line: &str, devices: &mut HashMap<String, Device>) {
             continue;
         }
         let (counter, byte10_hi) = f.observation();
-        devices.entry(f.txid()).or_default().record(counter, byte10_hi);
+        devices
+            .entry(f.txid())
+            .or_default()
+            .record(counter, byte10_hi);
     }
 }
 
@@ -164,7 +172,10 @@ fn rtl433_arg(txid: &str, seed: u16) -> String {
 /// whitespace-delimited so callers can grep it and feed it straight to `decode`;
 /// the ready-to-paste rtl_433 arg follows on the same line, details below.
 fn report_hit(txid: &str, seed: u16, dev: &Device) {
-    println!("recovered seed: {seed:#06x}    rtl_433: {}", rtl433_arg(txid, seed));
+    println!(
+        "recovered seed: {seed:#06x}    rtl_433: {}",
+        rtl433_arg(txid, seed)
+    );
     println!(
         "  txid {txid} — {} packets analyzed, {} distinct counters, earliest counter {}",
         dev.packets,
