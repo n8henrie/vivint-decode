@@ -1,13 +1,13 @@
-//! Format-agnostic extraction of Vivint 0x7x event frames from rtl_433 output.
+//! Format-agnostic extraction of Vivint 0x7x event frames from `rtl_433` output.
 //!
-//! rtl_433 JSON (`-F json:-`), CSV (`data` column), the `codes` array
+//! `rtl_433` JSON (`-F json:-`), CSV (`data` column), the `codes` array
 //! (`{96}fffe...`), and plain hex-per-line captures all embed the frame as a hex
 //! run. Two on-air layouts are accepted:
 //!
 //!   * **synced 12-byte** — `fffe` + the 10-byte event core (the older `-X …`
 //!     output). Depending on the receiver's OOK polarity the whole frame may be
 //!     bit-inverted, so the sync arrives as `0001` (`fffe ^ ffff`); both accepted.
-//!   * **bare 10-byte core** — `7a00…` with the sync stripped (rtl_433's newer
+//!   * **bare 10-byte core** — `7a00…` with the sync stripped (`rtl_433`'s newer
 //!     output for this device). Also accepted in either polarity.
 //!
 //! Only CRC-valid 0x7x event frames are yielded; the 12-bit packed check is what
@@ -28,7 +28,7 @@ impl Frame {
         (self.counter, self.byte10 & 0xf0)
     }
 
-    /// True for the **keystreamed event** subtypes whose status byte is XORed
+    /// True for the **keystreamed event** subtypes whose status byte is `XORed`
     /// with the keystream and whose byte-10 nibble is the crackable MAC: 0x7a
     /// (DW open/close), 0x74 (PIR motion), 0x79 (glass-break). Other 0x7x frames
     /// (0x72 heartbeat, 0x73 seed, 0x76) are not keyed and must not feed the crack.
@@ -45,9 +45,10 @@ impl Frame {
 
     /// The printed device label, e.g. "XXXX-XXX-XXXX", from the id bytes.
     pub(crate) fn txid(&self) -> String {
-        let p1 = ((self.id[0] as u32) << 4) | ((self.id[1] as u32) >> 4);
-        let p2 =
-            (((self.id[1] & 0x0f) as u32) << 16) | ((self.id[2] as u32) << 8) | self.id[3] as u32;
+        let p1 = (u32::from(self.id[0]) << 4) | (u32::from(self.id[1]) >> 4);
+        let p2 = (u32::from(self.id[1] & 0x0f) << 16)
+            | (u32::from(self.id[2]) << 8)
+            | u32::from(self.id[3]);
         format!("{:04}-{:03}-{:04}", p1, p2 / 10000, p2 % 10000)
     }
 }
@@ -56,7 +57,7 @@ impl Frame {
 fn crc16_8050(data: &[u8]) -> u16 {
     let mut crc: u16 = 0;
     for &b in data {
-        crc ^= (b as u16) << 8;
+        crc ^= u16::from(b) << 8;
         for _ in 0..8 {
             crc = if crc & 0x8000 != 0 {
                 (crc << 1) ^ 0x8050
@@ -101,13 +102,13 @@ fn parse_core(b: &[u8; 10]) -> Option<Frame> {
     crc_input[..8].copy_from_slice(&b[0..8]);
     crc_input[8] = b[8] & 0xf0;
     let calc12 = crc16_8050(&crc_input) >> 4;
-    let stored12 = (((b[8] & 0x0f) as u16) << 8) | b[9] as u16;
+    let stored12 = (u16::from(b[8] & 0x0f) << 8) | u16::from(b[9]);
     if calc12 != stored12 {
         return None; // only surface CRC-valid frames
     }
     Some(Frame {
         subtype: b[0],
-        counter: ((b[1] as u16) << 8) | b[2] as u16,
+        counter: (u16::from(b[1]) << 8) | u16::from(b[2]),
         status: b[3],
         byte10: b[8],
         id: [b[4], b[5], b[6], b[7]],

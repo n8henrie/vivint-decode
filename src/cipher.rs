@@ -11,7 +11,7 @@
 //! well under a second. Mapping to RFC 4503:
 //!
 //! * [`Generator::ed74`] = Rabbit's **next-state function**: `x.wrapping_mul(x)`
-//!   with the high/low 32-bit halves XORed is the `g(u,v) = LSW(sq) ^ MSW(sq)`
+//!   with the high/low 32-bit halves `XORed` is the `g(u,v) = LSW(sq) ^ MSW(sq)`
 //!   function; the `rotate_left(16)`/`rotate_left(8)` combinations are the state
 //!   mixing; the counter add uses the Rabbit constants A0..A7.
 //! * [`ROMPAT`] (`0x4d,0xd3,0x34`, i.e. `0x4d34d34d`) *is* Rabbit's counter
@@ -59,11 +59,11 @@ fn expand(seed: u16) -> [u16; 8] {
 const ROMPAT: [u8; 3] = [0x4d, 0xd3, 0x34];
 #[inline]
 fn rom_word(off: usize) -> u16 {
-    ROMPAT[off % 3] as u16 | ((ROMPAT[(off + 1) % 3] as u16) << 8)
+    u16::from(ROMPAT[off % 3]) | (u16::from(ROMPAT[(off + 1) % 3]) << 8)
 }
 #[inline]
 fn rom_dword(off: usize) -> u32 {
-    rom_word(off) as u32 | ((rom_word(off + 2) as u32) << 16)
+    u32::from(rom_word(off)) | (u32::from(rom_word(off + 2)) << 16)
 }
 
 /// Flat little-endian RAM window (0x200..0x2ff), matching the firmware layout.
@@ -79,33 +79,30 @@ impl Generator {
     }
     #[inline]
     fn r16(&self, a: usize) -> u16 {
-        self.m[a] as u16 | ((self.m[a + 1] as u16) << 8)
+        u16::from_le_bytes([self.m[a], self.m[a + 1]])
     }
     #[inline]
     fn w16(&mut self, a: usize, v: u16) {
-        self.m[a] = v as u8;
-        self.m[a + 1] = (v >> 8) as u8;
+        [self.m[a], self.m[a + 1]] = v.to_le_bytes();
     }
     #[inline]
     fn r32(&self, a: usize) -> u32 {
-        self.r16(a) as u32 | ((self.r16(a + 2) as u32) << 16)
+        u32::from(self.r16(a)) | (u32::from(self.r16(a + 2)) << 16)
     }
     #[inline]
     fn w32(&mut self, a: usize, v: u32) {
-        self.w16(a, v as u16);
-        self.w16(a + 2, (v >> 16) as u16);
+        [self.m[a], self.m[a + 1], self.m[a + 2], self.m[a + 3]] = v.to_le_bytes();
     }
 
     fn f294(&mut self) {
         let counter = self.r16(0x206);
-        let m = (counter % 7) as usize;
+        let mw = counter % 7; // 0..=6, kept as u16 for the value uses below
+        let m = usize::from(mw); // widened once for indexing
         self.w16(
             0x27a + m * 2,
-            self.r16(0x27a + m * 2)
-                .wrapping_add(counter)
-                .wrapping_add(m as u16),
+            self.r16(0x27a + m * 2).wrapping_add(counter).wrapping_add(mw),
         );
-        self.w16(0x288, self.r16(0x288) ^ m as u16);
+        self.w16(0x288, self.r16(0x288) ^ mw);
         let e: [u16; 8] = std::array::from_fn(|i| self.r16(0x27a + 2 * i));
         let mut s1 = [0u16; 16];
         let mut s2 = [0u16; 16];
@@ -142,13 +139,13 @@ impl Generator {
             let a = self.r32(0x252 + r8 * 4);
             let b = self.r32(0x24e + r8 * 4);
             let sub = self.r32(SC - 4 + r8 * 4);
-            let borrow = (b < sub) as u32;
+            let borrow = u32::from(b < sub);
             self.w32(
                 0x252 + r8 * 4,
                 a.wrapping_add(rom_dword(r8 * 4)).wrapping_add(borrow),
             );
         }
-        let borrow = (self.r32(0x26e) < self.r32(0x2b0)) as u16;
+        let borrow = u16::from(self.r32(0x26e) < self.r32(0x2b0));
         self.w16(0x272, borrow);
         self.w16(0x274, 0);
         for r8 in 0..8 {
@@ -220,10 +217,8 @@ impl Generator {
             ),
         };
         let r13 = r13 ^ r14;
-        self.m[0x2c1] = r12 as u8;
-        self.m[0x2c2] = (r12 >> 8) as u8;
-        self.m[0x2c3] = r13 as u8;
-        self.m[0x2c4] = (r13 >> 8) as u8;
+        [self.m[0x2c1], self.m[0x2c2]] = r12.to_le_bytes();
+        [self.m[0x2c3], self.m[0x2c4]] = r13.to_le_bytes();
     }
 
     fn f9b0(&mut self) {
@@ -348,7 +343,7 @@ impl Decoder {
 /// parallelized across cores. Only the high nibble of byte10 is significant.
 /// Returns every seed consistent with all observations (usually exactly one).
 pub(crate) fn crack(mut targets: Vec<(u16, u8)>) -> Vec<u16> {
-    for t in targets.iter_mut() {
+    for t in &mut targets {
         t.1 &= 0xf0;
     }
     targets.sort_by_key(|t| t.0);
@@ -356,9 +351,7 @@ pub(crate) fn crack(mut targets: Vec<(u16, u8)>) -> Vec<u16> {
     if targets.is_empty() {
         return Vec::new();
     }
-    let nthreads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
+    let nthreads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
     let chunk = 0x10000usize.div_ceil(nthreads);
     let targets_ref = &targets;
     std::thread::scope(|scope| {
@@ -370,8 +363,10 @@ pub(crate) fn crack(mut targets: Vec<(u16, u8)>) -> Vec<u16> {
                     let hi = ((t + 1) * chunk).min(0x10000);
                     let mut hits = Vec::new();
                     for s in lo..hi {
-                        if g.replay_matches(s as u16, targets_ref) {
-                            hits.push(s as u16);
+                        // lo..hi ⊆ 0..=0xffff (hi capped at 0x10000), so this never fails.
+                        let seed = u16::try_from(s).expect("seed index fits in u16");
+                        if g.replay_matches(seed, targets_ref) {
+                            hits.push(seed);
                         }
                     }
                     hits

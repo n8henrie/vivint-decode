@@ -1,5 +1,5 @@
 //! Drives the actual binary the way a user runs it. Uses the public inverted
-//! frames from github merbanan/rtl_433 issue #1504 (not a real user's device).
+//! frames from github `merbanan/rtl_433` issue #1504 (not a real user's device).
 //! No seed value is hardcoded — the decode test cracks the seed first, then uses
 //! whatever crack recovered.
 
@@ -53,8 +53,8 @@ fn recovered_seed() -> String {
     stdout
         .lines()
         .find_map(|l| l.strip_prefix("recovered seed: "))
+        .and_then(|rest| rest.split_whitespace().next()) // token, before the rtl_433 arg
         .expect("crack printed a recovered seed")
-        .trim()
         .to_string()
 }
 
@@ -63,6 +63,9 @@ fn crack_recovers_a_unique_seed_from_stdin() {
     let (ok, stdout) = run_stdin(&["crack"], &FRAMES.join("\n"));
     assert!(ok);
     assert!(stdout.contains("recovered seed: 0x"), "stdout: {stdout}");
+    // The same line offers a ready-to-paste rtl_433 mapping arg.
+    assert!(stdout.contains("rtl_433: -R 342:"), "stdout: {stdout}");
+    assert!(stdout.contains('='), "rtl_433 arg maps txid=seed: {stdout}");
 }
 
 #[test]
@@ -83,7 +86,9 @@ fn decode_uses_the_recovered_seed() {
     let seed = recovered_seed(); // never hardcoded — comes from crack at test time
     let (ok, stdout) = run_stdin(&["decode", &seed], &FRAMES.join("\n"));
     assert!(ok, "decode should emit events");
-    assert!(stdout.contains("contact="), "decode output: {stdout}");
+    // Full Honeywell-style status bitfield, both loops surfaced.
+    assert!(stdout.contains("loop1="), "decode output: {stdout}");
+    assert!(stdout.contains("loop2="), "decode output: {stdout}");
     assert!(stdout.contains("txid="), "decode output: {stdout}");
 }
 

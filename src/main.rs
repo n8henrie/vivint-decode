@@ -1,10 +1,10 @@
 //! Recover and use the secret seed of a Vivint/Honeywell 345 MHz door sensor,
-//! working only from rtl_433 captures. No firmware, no key at runtime.
+//! working only from `rtl_433` captures. No firmware, no key at runtime.
 //!
 //!   vivint-decode crack  [captures...]            # recover the 16-bit seed
 //!   vivint-decode decode <seed> [captures...]     # interpret packets with it
 //!
-//! Captures are rtl_433 output (JSON / CSV / codes / plain hex), given as files
+//! Captures are `rtl_433` output (JSON / CSV / codes / plain hex), given as files
 //! (concatenated) or on stdin when no files are named. Every frame carries its
 //! transmitter id in the clear, so observations are grouped **per TXID** and each
 //! device is cracked independently — a second nearby sensor can't poison the
@@ -60,13 +60,14 @@ enum Cmd {
 fn main() {
     std::process::exit(match Cli::parse().cmd {
         Cmd::Crack { captures } => crack(&captures),
-        Cmd::Decode { seed, captures } => match parse_seed(&seed) {
-            Some(s) => decode(s, &captures),
-            None => {
+        Cmd::Decode { seed, captures } => {
+            if let Some(s) = parse_seed(&seed) {
+                decode(s, &captures)
+            } else {
                 eprintln!("invalid seed {seed:?} (expected hex 0x.... or a decimal 0..65535)");
                 2
             }
-        },
+        }
     });
 }
 
@@ -153,12 +154,12 @@ fn ingest(line: &str, devices: &mut HashMap<String, Device>) {
     }
 }
 
-/// rtl_433 decoder number for the Vivint 0x7x device. This is the `-R <n>` slot
-/// the decoder registers under in your rtl_433 build; adjust if yours differs.
+/// `rtl_433` decoder number for the Vivint 0x7x device. This is the `-R <n>` slot
+/// the decoder registers under in your `rtl_433` build; adjust if yours differs.
 const RTL433_PROTOCOL: &str = "342";
 
-/// The `-R` mapping arg to hand rtl_433 so it un-keys this device itself, e.g.
-/// `-R 342:0056-0405817=0c5e`. `txid` is our "PPPP-QQQ-RRRR" label; rtl_433 wants
+/// The `-R` mapping arg to hand `rtl_433` so it un-keys this device itself, e.g.
+/// `-R 342:0056-0405817=0c5e`. `txid` is our "PPPP-QQQ-RRRR" label; `rtl_433` wants
 /// the id un-hyphenated in the middle ("PPPP-QQQRRRR").
 fn rtl433_arg(txid: &str, seed: u16) -> String {
     let id = match txid.split_once('-') {
@@ -170,7 +171,7 @@ fn rtl433_arg(txid: &str, seed: u16) -> String {
 
 /// Print a recovered seed. The `recovered seed: 0x....` token is kept first and
 /// whitespace-delimited so callers can grep it and feed it straight to `decode`;
-/// the ready-to-paste rtl_433 arg follows on the same line, details below.
+/// the ready-to-paste `rtl_433` arg follows on the same line, details below.
 fn report_hit(txid: &str, seed: u16, dev: &Device) {
     println!(
         "recovered seed: {seed:#06x}    rtl_433: {}",
