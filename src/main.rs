@@ -2,14 +2,16 @@
 //! working only from `rtl_433` captures. No firmware, no key at runtime.
 //!
 //!   vivint-decode crack  [captures...]            # recover the 16-bit seed
-//!   vivint-decode decode \<seed> [captures...]     # interpret packets with it
+//!   vivint-decode decode <seed> [captures...]     # interpret packets with it
 //!
 //! Captures are `rtl_433` output (JSON / CSV / codes / plain hex), given as files
 //! (concatenated) or on stdin when no files are named. Every frame carries its
 //! transmitter id in the clear, so observations are grouped **per TXID** and each
 //! device is cracked independently — a second nearby sensor can't poison the
-//! brute force. When reading a live stdin stream, `crack` re-attempts the brute
-//! force as frames arrive and stops as soon as one device's seed is pinned.
+//! brute force. `crack` recovers **every** device present: `cat *.json | vivint-decode
+//! crack` cracks all of them at once. When reading a live stdin stream, it re-attempts
+//! the brute force as frames arrive, announces each device's seed the moment it is
+//! pinned, and prints a combined `-R 342:ID1=s1,ID2=s2,…` mapping covering all of them.
 
 mod cipher;
 mod frame;
@@ -158,15 +160,44 @@ fn ingest(line: &str, devices: &mut HashMap<String, Device>) {
 /// the decoder registers under in your `rtl_433` build; adjust if yours differs.
 const RTL433_PROTOCOL: &str = "342";
 
-/// The `-R` mapping arg to hand `rtl_433` so it un-keys this device itself, e.g.
-/// `-R 342:0056-0405817=0c5e`. `txid` is our "PPPP-QQQ-RRRR" label; `rtl_433` wants
-/// the id un-hyphenated in the middle ("PPPP-QQQRRRR").
-fn rtl433_arg(txid: &str, seed: u16) -> String {
-    let id = match txid.split_once('-') {
+/// `rtl_433`'s spelling of our "PPPP-QQQ-RRRR" TXID label: it wants the id
+/// un-hyphenated in the middle ("PPPP-QQQRRRR").
+fn rtl433_id(txid: &str) -> String {
+    match txid.split_once('-') {
         Some((p1, rest)) => format!("{p1}-{}", rest.replace('-', "")),
         None => txid.to_string(),
-    };
-    format!("-R {RTL433_PROTOCOL}:{id}={seed:04x}")
+    }
+}
+
+/// The `-R` mapping arg to hand `rtl_433` so it un-keys this device itself, e.g.
+/// `-R 342:0056-0405817=0c5e`.
+fn rtl433_arg(txid: &str, seed: u16) -> String {
+    format!("-R {RTL433_PROTOCOL}:{}={seed:04x}", rtl433_id(txid))
+}
+
+/// One `-R` arg mapping *every* solved device at once, e.g.
+/// `-R 342:0019-0507743=dda9,0056-0405817=0c5e`. `rtl_433` accepts comma-separated
+/// `id=seed` pairs, so a single arg configures a whole house of sensors.
+fn rtl433_arg_all(solved: &BTreeMap<String, u16>) -> String {
+    let pairs: Vec<String> = solved
+        .iter()
+        .map(|(txid, seed)| format!("{}={seed:04x}", rtl433_id(txid)))
+        .collect();
+    format!("-R {RTL433_PROTOCOL}:{}", pairs.join(","))
+}
+
+/// Print the combined mapping for all solved devices. Only worth showing once two
+/// or more devices are known — for a single device the per-device line already has
+/// the same arg.
+fn print_combined(solved: &BTreeMap<String, u16>) {
+    if solved.len() < 2 {
+        return;
+    }
+    println!(
+        "all {} devices    rtl_433: {}",
+        solved.len(),
+        rtl433_arg_all(solved)
+    );
 }
 
 /// Print a recovered seed. The `recovered seed: 0x....` token is kept first and
@@ -185,23 +216,55 @@ fn report_hit(txid: &str, seed: u16, dev: &Device) {
     );
 }
 
-/// Sweep each device that is dirty and has at least `min_distinct` counters. On
-/// the first device that pins to a single seed, print it and return true.
-fn try_devices(devices: &mut HashMap<String, Device>, min_distinct: usize) -> bool {
+/// Sweep every dirty, not-yet-solved device with at least `min_distinct` counters.
+/// Each device that pins to a single seed is announced and recorded in `solved`;
+/// the sweep does not stop at the first — a whole house of sensors resolves in one
+/// pass. When `diag` is `Some(tag)`, ambiguous / no-match devices get a progress
+/// note on stderr under that tag (kept quiet at EOF). Each ready device is cracked
+/// exactly once. Returns true if any *new* device was solved this call.
+fn sweep(
+    devices: &mut HashMap<String, Device>,
+    min_distinct: usize,
+    solved: &mut BTreeMap<String, u16>,
+    diag: Option<&str>,
+) -> bool {
     let mut txids: Vec<String> = devices.keys().cloned().collect();
     txids.sort();
+    let mut progress = false;
     for txid in txids {
+        if solved.contains_key(&txid) {
+            continue; // already pinned — leave it alone
+        }
         let dev = devices.get_mut(&txid).unwrap();
-        if !dev.dirty || dev.distinct() < min_distinct {
+        let distinct = dev.distinct();
+        if !dev.dirty || distinct < min_distinct {
             continue;
         }
-        dev.dirty = false; // don't re-sweep the same observations next batch
-        if let [seed] = dev.seeds().as_slice() {
-            report_hit(&txid, *seed, dev);
-            return true;
+        dev.dirty = false; // don't re-sweep the same observations until a new counter arrives
+        match dev.seeds().as_slice() {
+            [seed] => {
+                report_hit(&txid, *seed, dev);
+                solved.insert(txid, *seed);
+                progress = true;
+            }
+            [] => {
+                if let Some(tag) = diag {
+                    eprintln!(
+                        "{tag} txid {txid}: {distinct} counters but no seed matches — corrupt frames or wrong device?"
+                    );
+                }
+            }
+            many => {
+                if let Some(tag) = diag {
+                    eprintln!(
+                        "{tag} txid {txid}: {distinct} counters, {} candidate seeds — capture more low counters",
+                        many.len()
+                    );
+                }
+            }
         }
     }
-    false
+    progress
 }
 
 fn crack(captures: &[PathBuf]) -> i32 {
@@ -213,10 +276,12 @@ fn crack(captures: &[PathBuf]) -> i32 {
 }
 
 /// Stream stdin: accumulate observations and re-attempt the brute force every
-/// `STREAM_BATCH` lines, printing a progress line each checkpoint and exiting the
-/// moment any device's seed is pinned.
+/// `STREAM_BATCH` lines. Each device is announced the moment it is pinned; a
+/// combined `-R` mapping is (re)printed whenever a new device joins the set, and
+/// once more at EOF. Runs until the stream ends — every device gets cracked.
 fn crack_stream() -> i32 {
     let mut devices: HashMap<String, Device> = HashMap::new();
+    let mut solved: BTreeMap<String, u16> = BTreeMap::new();
     let mut lines = 0usize;
     let mut since = 0usize;
     for line in std::io::stdin().lock().lines().map_while(Result::ok) {
@@ -227,26 +292,32 @@ fn crack_stream() -> i32 {
             continue;
         }
         since = 0;
-        if stream_checkpoint(lines, &mut devices) {
-            return 0;
+        if stream_checkpoint(lines, &mut devices, &mut solved) {
+            print_combined(&solved); // a new device joined — refresh the combined arg
         }
     }
     // EOF: one last attempt, lowering the bar to include short-lived devices.
     for dev in devices.values_mut() {
         dev.dirty = true;
     }
-    if try_devices(&mut devices, 2) {
-        return 0;
+    sweep(&mut devices, 2, &mut solved, None);
+    if solved.is_empty() {
+        report_no_seed(&devices);
+        return 1;
     }
-    report_no_seed(&devices);
-    1
+    print_combined(&solved); // authoritative final mapping for everything solved
+    0
 }
 
-/// One streaming checkpoint: print collection status to stderr, then sweep each
-/// ready device. Returns true if a unique seed was found (and printed).
-fn stream_checkpoint(lines: usize, devices: &mut HashMap<String, Device>) -> bool {
+/// One streaming checkpoint: print collection status to stderr, then sweep every
+/// ready device into `solved`. Returns true if a new device was solved this call.
+fn stream_checkpoint(
+    lines: usize,
+    devices: &mut HashMap<String, Device>,
+    solved: &mut BTreeMap<String, u16>,
+) -> bool {
     let frames: usize = devices.values().map(|d| d.packets).sum();
-    let tag = format!("[{lines} lines, {frames} frames]");
+    let tag = format!("[{lines} lines, {frames} frames, {} solved]", solved.len());
     if devices.is_empty() {
         eprintln!(
             "{tag} no frame hex parsed yet — is rtl_433 emitting the raw frame? \
@@ -254,10 +325,16 @@ fn stream_checkpoint(lines: usize, devices: &mut HashMap<String, Device>) -> boo
         );
         return false;
     }
+    // Cheap per-device progress for anything still short of the crack threshold
+    // (no brute force here). Devices at/above the threshold are handled by sweep(),
+    // which cracks each exactly once and reports ambiguous/no-match cases via `diag`.
     let mut txids: Vec<String> = devices.keys().cloned().collect();
     txids.sort();
     for txid in &txids {
-        let dev = devices.get_mut(txid).unwrap();
+        if solved.contains_key(txid) {
+            continue;
+        }
+        let dev = &devices[txid];
         let distinct = dev.distinct();
         if distinct < MIN_DISTINCT {
             eprintln!(
@@ -265,27 +342,9 @@ fn stream_checkpoint(lines: usize, devices: &mut HashMap<String, Device>) -> boo
                  toggle the reed for more distinct low counters",
                 dev.min_counter()
             );
-            continue;
-        }
-        if !dev.dirty {
-            continue; // already swept these exact observations
-        }
-        dev.dirty = false;
-        match dev.seeds().as_slice() {
-            [seed] => {
-                report_hit(txid, *seed, dev);
-                return true;
-            }
-            [] => eprintln!(
-                "{tag} txid {txid}: {distinct} counters but no seed matches — corrupt frames or wrong device?"
-            ),
-            many => eprintln!(
-                "{tag} txid {txid}: {distinct} counters, {} candidate seeds — capture more low counters",
-                many.len()
-            ),
         }
     }
-    false
+    sweep(devices, MIN_DISTINCT, solved, Some(&tag))
 }
 
 /// Crack a finite set of files: group by TXID, then report every device.
@@ -300,7 +359,7 @@ fn crack_files(captures: &[PathBuf]) -> i32 {
     }
     let mut txids: Vec<&String> = devices.keys().collect();
     txids.sort();
-    let mut any = false;
+    let mut solved: BTreeMap<String, u16> = BTreeMap::new();
     for txid in txids {
         let dev = &devices[txid];
         if let Some(m) = dev.min_counter()
@@ -314,7 +373,7 @@ fn crack_files(captures: &[PathBuf]) -> i32 {
         match dev.seeds().as_slice() {
             [seed] => {
                 report_hit(txid, *seed, dev);
-                any = true;
+                solved.insert(txid.clone(), *seed);
             }
             [] => println!(
                 "txid {txid}: no seed matches ({} distinct counters) — wrong device or corrupt frames?",
@@ -330,7 +389,8 @@ fn crack_files(captures: &[PathBuf]) -> i32 {
             }
         }
     }
-    i32::from(!any)
+    print_combined(&solved); // one arg mapping every device that resolved
+    i32::from(solved.is_empty())
 }
 
 /// No device resolved to a single seed; summarize what we have and how to help.
@@ -426,4 +486,41 @@ fn decode(seed: u16, captures: &[PathBuf]) -> i32 {
     }
     eprintln!("decoded {n} event(s)");
     i32::from(n == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BTreeMap, rtl433_arg, rtl433_arg_all, rtl433_id};
+
+    #[test]
+    fn id_drops_the_inner_hyphens_only() {
+        // "PPPP-QQQ-RRRR" -> "PPPP-QQQRRRR": first hyphen stays, the rest go.
+        assert_eq!(rtl433_id("0019-050-7743"), "0019-0507743");
+        assert_eq!(rtl433_id("0056-040-5817"), "0056-0405817");
+        // no hyphens / single segment: passed through untouched
+        assert_eq!(rtl433_id("abcdef"), "abcdef");
+    }
+
+    #[test]
+    fn single_device_arg() {
+        assert_eq!(
+            rtl433_arg("0056-040-5817", 0x0c5e),
+            "-R 342:0056-0405817=0c5e"
+        );
+    }
+
+    #[test]
+    fn combined_arg_joins_all_devices_with_commas() {
+        let solved: BTreeMap<String, u16> = [
+            ("0019-050-7610".to_string(), 0x05c9u16),
+            ("0019-050-7743".to_string(), 0xdda9u16),
+        ]
+        .into_iter()
+        .collect();
+        // BTreeMap keeps TXID order deterministic for a stable, paste-able arg.
+        assert_eq!(
+            rtl433_arg_all(&solved),
+            "-R 342:0019-0507610=05c9,0019-0507743=dda9"
+        );
+    }
 }

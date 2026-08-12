@@ -100,9 +100,7 @@ impl Generator {
         let m = usize::from(mw); // widened once for indexing
         self.w16(
             0x27a + m * 2,
-            self.r16(0x27a + m * 2)
-                .wrapping_add(counter)
-                .wrapping_add(mw),
+            self.r16(0x27a + m * 2).wrapping_add(counter).wrapping_add(mw),
         );
         self.w16(0x288, self.r16(0x288) ^ mw);
         let e: [u16; 8] = std::array::from_fn(|i| self.r16(0x27a + 2 * i));
