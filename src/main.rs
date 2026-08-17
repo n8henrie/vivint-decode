@@ -1,8 +1,8 @@
 //! Recover and use the secret seed of a Vivint/Honeywell 345 MHz door sensor,
 //! working only from `rtl_433` captures. No firmware, no key at runtime.
 //!
-//!   vivint-decode crack  [captures...]            # recover the 16-bit seed
-//!   vivint-decode decode <seed> [captures...]     # interpret packets with it
+//!   vivint-decode crack  [captures...]              # recover the 16-bit seed
+//!   vivint-decode decode <seed|map> [captures...]   # interpret packets with it/them
 //!
 //! Captures are `rtl_433` output (JSON / CSV / codes / plain hex), given as files
 //! (concatenated) or on stdin when no files are named. Every frame carries its
@@ -12,12 +12,16 @@
 //! crack` cracks all of them at once. When reading a live stdin stream, it re-attempts
 //! the brute force as frames arrive, announces each device's seed the moment it is
 //! pinned, and prints a combined `-R 342:ID1=s1,ID2=s2,…` mapping covering all of them.
+//!
+//! `decode` matches: give it a single seed to un-key one device, or a comma-separated
+//! `TXID=seed` mapping (`rtl_433`'s spelling, exactly what `crack` prints) to un-key a
+//! whole house at once — each frame is decoded with its own transmitter's seed.
 
 mod cipher;
 mod frame;
 
 use clap::{Parser, Subcommand};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::BufRead;
 use std::path::PathBuf;
 
@@ -50,9 +54,11 @@ enum Cmd {
         /// Capture files to concatenate; omit to read (and stream) stdin.
         captures: Vec<PathBuf>,
     },
-    /// Interpret packets with a known seed (files, or stdin).
+    /// Interpret packets with known seed(s) (files, or stdin).
     Decode {
-        /// The recovered seed, hex (0x....) or decimal.
+        /// One seed (hex `0x....` or decimal), or an `rtl_433`-style
+        /// `TXID=seed,TXID=seed` mapping for several devices — the same thing
+        /// `crack` prints. Each frame is decoded with its own transmitter's seed.
         seed: String,
         /// Capture files to concatenate; omit to read stdin.
         captures: Vec<PathBuf>,
@@ -62,14 +68,13 @@ enum Cmd {
 fn main() {
     std::process::exit(match Cli::parse().cmd {
         Cmd::Crack { captures } => crack(&captures),
-        Cmd::Decode { seed, captures } => {
-            if let Some(s) = parse_seed(&seed) {
-                decode(s, &captures)
-            } else {
-                eprintln!("invalid seed {seed:?} (expected hex 0x.... or a decimal 0..65535)");
+        Cmd::Decode { seed, captures } => match parse_seeds(&seed) {
+            Ok(seeds) => decode(&seeds, &captures),
+            Err(e) => {
+                eprintln!("{e}");
                 2
             }
-        }
+        },
     });
 }
 
@@ -80,6 +85,76 @@ fn parse_seed(s: &str) -> Option<u16> {
         None => s.parse().ok()?,
     };
     u16::try_from(v).ok()
+}
+
+/// Parse a seed value from a mapping entry. These come from `crack`'s printed
+/// arg, where seeds are bare 4-digit hex (`05c9`), matching `rtl_433`'s own
+/// convention — so hex is the default here; a `0x` prefix is also accepted.
+fn parse_mapped_seed(s: &str) -> Option<u16> {
+    let s = s.trim();
+    let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    u16::from_str_radix(hex, 16).ok()
+}
+
+/// Seeds to decode with: either one seed for every transmitter (back-compat), or
+/// a per-TXID mapping keyed by the `rtl_433` id spelling (see [`rtl433_id`]).
+#[derive(Debug, PartialEq)]
+enum Seeds {
+    One(u16),
+    Map(HashMap<String, u16>),
+}
+
+impl Seeds {
+    /// The seed to use for `id` (already in [`rtl433_id`] form), if known.
+    fn get(&self, id: &str) -> Option<u16> {
+        match self {
+            Seeds::One(s) => Some(*s),
+            Seeds::Map(m) => m.get(id).copied(),
+        }
+    }
+}
+
+/// Tolerate a pasted `-R <proto>:` prefix in front of a mapping, so `crack`'s
+/// printed arg can be handed to `decode` verbatim.
+fn strip_rtl433_prefix(s: &str) -> &str {
+    let s = s.strip_prefix("-R ").map_or(s, str::trim_start);
+    match s.split_once(':') {
+        // drop a leading numeric protocol selector like "342:"
+        Some((proto, rest)) if !proto.is_empty() && proto.bytes().all(|b| b.is_ascii_digit()) => {
+            rest
+        }
+        _ => s,
+    }
+}
+
+/// Parse the `decode` seed argument: a lone seed (hex `0x....` or decimal) applied
+/// to every device, or `rtl_433`'s comma-separated `TXID=seed` mapping. TXIDs are
+/// accepted in either "PPPP-QQQ-RRRR" or `rtl_433`'s "PPPP-QQQRRRR" spelling and
+/// normalized to the latter; an optional leading `-R <proto>:` is tolerated.
+fn parse_seeds(arg: &str) -> Result<Seeds, String> {
+    let body = strip_rtl433_prefix(arg.trim());
+    if !body.contains('=') {
+        return parse_seed(body).map(Seeds::One).ok_or_else(|| {
+            format!("invalid seed {body:?} (expected hex 0x.... or a decimal 0..65535)")
+        });
+    }
+    let mut map = HashMap::new();
+    for pair in body.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let (id, seed) = pair
+            .split_once('=')
+            .ok_or_else(|| format!("bad mapping entry {pair:?} (expected TXID=seed)"))?;
+        let seed = parse_mapped_seed(seed)
+            .ok_or_else(|| format!("invalid seed {:?} for txid {}", seed.trim(), id.trim()))?;
+        map.insert(rtl433_id(id.trim()), seed);
+    }
+    if map.is_empty() {
+        return Err("empty seed mapping".to_string());
+    }
+    Ok(Seeds::Map(map))
 }
 
 /// Read every line of the named files (concatenated) into memory.
@@ -435,17 +510,20 @@ fn format_status(plain: u8) -> String {
     )
 }
 
-fn decode(seed: u16, captures: &[PathBuf]) -> i32 {
-    let mut dec = cipher::Decoder::new(seed);
-    let mut last: Option<(u8, u16)> = None; // (subtype, counter) for repeat collapse
+fn decode(seeds: &Seeds, captures: &[PathBuf]) -> i32 {
+    // One stateful decoder per transmitter, built lazily from that device's seed.
+    let mut decoders: HashMap<String, cipher::Decoder> = HashMap::new();
+    let mut last: HashMap<String, (u8, u16)> = HashMap::new(); // per-txid repeat collapse
+    let mut unknown: HashSet<String> = HashSet::new(); // warned-about TXIDs with no seed
     let mut n = 0usize;
     for line in input_lines(captures) {
         for f in frame::frames_in_line(&line) {
+            let id = rtl433_id(&f.txid());
             let key = (f.subtype, f.counter);
-            if last == Some(key) {
-                continue; // collapse consecutive repeats of the same frame
+            if last.get(&id) == Some(&key) {
+                continue; // collapse consecutive repeats of the same frame per device
             }
-            last = Some(key);
+            last.insert(id.clone(), key);
 
             if let Some(announced) = f.announced_seed() {
                 println!(
@@ -466,6 +544,20 @@ fn decode(seed: u16, captures: &[PathBuf]) -> i32 {
                 );
                 continue;
             }
+            // Keyed event: needs this transmitter's seed. Build its decoder once.
+            if !decoders.contains_key(&id) {
+                let Some(s) = seeds.get(&id) else {
+                    if unknown.insert(id.clone()) {
+                        eprintln!(
+                            "txid {} ({id}): no seed provided — skipping its keyed events",
+                            f.txid(),
+                        );
+                    }
+                    continue;
+                };
+                decoders.insert(id.clone(), cipher::Decoder::new(s));
+            }
+            let dec = decoders.get_mut(&id).unwrap();
             match dec.plain_status(f.counter, f.status) {
                 Some(plain) => {
                     println!(
@@ -490,7 +582,7 @@ fn decode(seed: u16, captures: &[PathBuf]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{BTreeMap, rtl433_arg, rtl433_arg_all, rtl433_id};
+    use super::{BTreeMap, HashMap, Seeds, parse_seeds, rtl433_arg, rtl433_arg_all, rtl433_id};
 
     #[test]
     fn id_drops_the_inner_hyphens_only() {
@@ -522,5 +614,40 @@ mod tests {
             rtl433_arg_all(&solved),
             "-R 342:0019-0507610=05c9,0019-0507743=dda9"
         );
+    }
+
+    #[test]
+    fn parse_single_seed_hex_or_decimal() {
+        assert_eq!(parse_seeds("0x05c9").unwrap(), Seeds::One(0x05c9));
+        assert_eq!(parse_seeds(" 1481 ").unwrap(), Seeds::One(1481));
+    }
+
+    #[test]
+    fn parse_mapping_normalizes_txids() {
+        // Mixed spellings on input; both normalize to rtl_433's "PPPP-QQQRRRR".
+        let got = parse_seeds("0019-0507610=05c9,0019-050-7743=dda9").unwrap();
+        let want: HashMap<String, u16> = [
+            ("0019-0507610".to_string(), 0x05c9u16),
+            ("0019-0507743".to_string(), 0xdda9u16),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(got, Seeds::Map(want));
+    }
+
+    #[test]
+    fn parse_tolerates_pasted_crack_arg() {
+        // crack prints "rtl_433: -R 342:...="; the "-R 342:" prefix is stripped.
+        let got = parse_seeds("-R 342:0019-0507610=05c9").unwrap();
+        let want: HashMap<String, u16> =
+            [("0019-0507610".to_string(), 0x05c9u16)].into_iter().collect();
+        assert_eq!(got, Seeds::Map(want));
+    }
+
+    #[test]
+    fn parse_rejects_bad_input() {
+        assert!(parse_seeds("0019-0507610=zzzz").is_err()); // non-hex seed
+        assert!(parse_seeds("0019-0507610").is_err()); // no '=' and not a number
+        assert!(parse_seeds("342:0019-0507610=1,broken").is_err()); // missing '='
     }
 }
