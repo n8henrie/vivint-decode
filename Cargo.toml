@@ -1,6 +1,6 @@
 [package]
 name = "vivint-decode"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 publish = true
 description = "Find the seed and decode 345 MHz output from Vivint DW21R sensors"
