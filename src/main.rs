@@ -92,7 +92,10 @@ fn parse_seed(s: &str) -> Option<u16> {
 /// convention — so hex is the default here; a `0x` prefix is also accepted.
 fn parse_mapped_seed(s: &str) -> Option<u16> {
     let s = s.trim();
-    let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    let hex = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
     u16::from_str_radix(hex, 16).ok()
 }
 
@@ -639,8 +642,9 @@ mod tests {
     fn parse_tolerates_pasted_crack_arg() {
         // crack prints "rtl_433: -R 342:...="; the "-R 342:" prefix is stripped.
         let got = parse_seeds("-R 342:0019-0507610=05c9").unwrap();
-        let want: HashMap<String, u16> =
-            [("0019-0507610".to_string(), 0x05c9u16)].into_iter().collect();
+        let want: HashMap<String, u16> = [("0019-0507610".to_string(), 0x05c9u16)]
+            .into_iter()
+            .collect();
         assert_eq!(got, Seeds::Map(want));
     }
 
