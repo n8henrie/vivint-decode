@@ -26,10 +26,11 @@ jobs:
           cargo build --release
       - name: Packaging final binary
         shell: bash
+        env:
+          BINARY_NAME: ${{ github.event.repository.name }}
         run: |
           cd target/release
 
-          BINARY_NAME=vivint-decode
           REFNAME=${{  github.ref_name }}
           # Avoid issues with refnames that have slashes
           REFNAME=${REFNAME//\//-}
@@ -42,11 +43,13 @@ jobs:
 
       - name: Releasing assets
         if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          BINARY_NAME: ${{ github.event.repository.name }}
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            target/release/vivint-decode-*.tar.gz
-            target/release/vivint-decode-*.sha256
+            target/release/${BINARY_NAME}-*.tar.gz
+            target/release/${BINARY_NAME}-*.sha256
 
   publish-cargo:
     if: startsWith(github.ref, 'refs/tags/v')
